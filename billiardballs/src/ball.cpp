@@ -22,10 +22,13 @@ int parser::SCREENWIDTH;
 int parser::maxFPS;
 int parser::ballQuan;
 float parser::speedModifyer;
-int ball::counter;
 ALLEGRO_FONT* ball::fon;
+Time gameTime;
 
-
+double theta(Eigen::Vector2f vec)
+{
+	return atan2(vec.x(), vec.y());
+}
 
 Eigen::Vector2f ball::getPos() const
 {
@@ -45,14 +48,15 @@ int ball::getRad() const
 
 ball::ball()
 {
-	rad = randomizer::gen() % 15 + 7;
+	const int fuck = int((randomizer::gen() % 15));
+	rad = fuck + 7;
 	pos = Eigen::Vector2f(randomizer::gen() % (parser::SCREENWIDTH - 100) + 50, randomizer::gen()%(parser::SCREENHEIGHT-100)+50);
 	col = al_map_rgb(randomizer::gen()%256, randomizer::gen() % 256, randomizer::gen() % 256);
 	dir = Eigen::Vector2f(0, 0);
-	accel = Eigen::Vector2f(0, 1);
-	n = counter;
-	++counter;
+	accel = Eigen::Vector2f(0,0);
 	held = false;
+	afterHeld = false;
+	bumped = false;
 }
 
 void ball::drawMe() const
@@ -64,40 +68,46 @@ void ball::drawMe() const
 	{
 		al_draw_filled_circle(pos.x(), pos.y(), rad, col);
 	}
-	al_draw_text(fon, al_map_rgb(0, 0, 0), pos.x() - 7, pos.y() - 6, 0, std::to_string(n).c_str());
+	al_draw_text(fon, al_map_rgb(0, 0, 0), pos.x() - 7, pos.y() - 6, 0, std::to_string(rad).c_str());
 }
 
 void ball::go()
 {
-	const float forY = pos.y() + dir.y() * parser::speedModifyer;
-	const float forX = pos.x() + dir.x() * parser::speedModifyer;
-	bool shit = true;
+	const float forY = pos.y();
+	const float forX = pos.x();
 	if (forY > parser::SCREENHEIGHT - rad)
 	{
-		dir = Eigen::Vector2f(dir.x(), dir.y() * -1 + 1);
-		//shit = false;
+		pos << pos.x(), rad;
 	}
 	else if (forY < rad)
 	{
-		dir = Eigen::Vector2f(dir.x(), dir.y() * -1 - 1);
-		//shit = false;
+		pos << pos.x(), parser::SCREENHEIGHT - rad;
 	}
 	if (forX > parser::SCREENWIDTH - rad)
 	{
+		pos << parser::SCREENWIDTH - rad, pos.y();
 		dir = Eigen::Vector2f(dir.x() * -1 + 1, dir.y());
-		//shit = false;
+		accel *= -1;
+
 	}
 	else if (forX < rad)
 	{
+		pos << rad, pos.y();
 		dir = Eigen::Vector2f(dir.x() * -1 - 1, dir.y());
-		//shit = false;
+		accel *= -1;
 	}
-	if (shit)
+	pos += dir * parser::speedModifyer * gameTime.delta;
+	if (dir.dot(accel) > 0)
+		dir -= accel * parser::speedModifyer * gameTime.delta;
+	else
 	{
-		//dir += accel;
-		pos += dir;
+		accel = Eigen::Vector2f(0, 0);
+		dir = Eigen::Vector2f(0, 0);
+		afterHeld = false;
 	}
 }
+
+
 
 void ball::regeneratePos(ball& first, ball& second)
 {
@@ -108,32 +118,53 @@ void ball::regeneratePos(ball& first, ball& second)
 
 void ball::bump(ball& first, ball& second)
 {
-	//const Eigen::Vector2f firstdir = first.dir;
-	//const Eigen::Vector2f seconddir = second.dir;
-	first.dir = first.dir - ((first.pos - second.pos) * first.dir.norm());
-	second.dir = second.dir -((first.pos - second.pos) * second.dir.norm());
+	const Eigen::Vector2f firstdir = first.dir;
+	const Eigen::Vector2f seconddir = second.dir;
+	double myTheta =  theta(Eigen::Vector2f(firstdir - seconddir));
+	double secTheta = myTheta * -1;
+	const Eigen::Rotation2Df t(myTheta);
+	const Eigen::Rotation2Df c(myTheta);
+	const Eigen::Vector2f firstrot  = t.toRotationMatrix() * firstdir;
+	const Eigen::Vector2f secondrot = t.toRotationMatrix() * seconddir;;
+	const Eigen::Vector2f firstlast = ((first.rad - second.rad) * firstrot + 2 * second.rad * secondrot) / (first.rad + second.rad);
+	const Eigen::Vector2f f1 = t.toRotationMatrix() * -1 * Eigen::Vector2f(firstlast.x(), firstlast.y());
+	const Eigen::Vector2f secondlast = ((second.rad - first.rad) * secondrot + 2 * first.rad * firstrot) / (first.rad + second.rad);
+	const Eigen::Vector2f f2 = t.toRotationMatrix() * -1 * Eigen::Vector2f(secondlast.x(), secondlast.y());
+	first .changeDir(Eigen::Vector2f(f1.x(), f1.y() * -1));
+	second.changeDir(Eigen::Vector2f(f2.x(), f2.y() * -1));
+
 }
 
 void ball::moveUs(ball& first, ball& second)
 {
-	const auto diff = Eigen::Vector2f(first.getPos() - second.getPos());
-	float most = first.rad + second.rad - diff.norm();
-	first.pos+= diff.normalized() * most;
-	second.pos -= diff.normalized() * most;
+	const auto diff  =  Eigen::Vector2f(first.getPos() - second.getPos()) ;
+	const float most =  first.rad		 + second.rad - diff.norm() + 1;
+	first.pos		+= diff.normalized() * most;
+	second.pos		-= diff.normalized() * most;
+}
+
+void ball::setPos(int x, int y)
+{
+	pos = Eigen::Vector2f(x, y);
+}
+void ball::changeDir(const Eigen::Vector2f newDir)
+{
+	dir = newDir;
+	accel = newDir * 0.02;
+	afterHeld = true;
 }
 
 
 
 
 
-std::vector<float> ballCon::OverlappsX;
-std::vector<float> ballCon::OverlappsY;
+
+
 
 
 
 ballCon::ballCon()
 {
-	ball::counter = 1;
 	cont = new ball[parser::ballQuan];
 	bool doAgain;
 	again:
@@ -145,20 +176,14 @@ ballCon::ballCon()
 				const auto diff = Eigen::Vector2f(cont[i].getPos() - cont[j].getPos());
 				if (diff.norm() < (cont[i].getRad() + cont[j].getRad()))
 				{
-					std::cout << "Overlapped Ns = " << cont[i].n << " and " << cont[j].n << "; they're coords are 1x = " << cont[i].getPos().x() << ", 1y = " << cont[i].getPos().y() << "\n2x = "
-						<< cont[j].getPos().x() << ", 2y = " << cont[j].getPos().y() << std::endl;
-					OverlappsX.push_back(cont[i].getPos().x());
-					OverlappsX.push_back(cont[j].getPos().x());
-					OverlappsY.push_back(cont[i].getPos().y());
-					OverlappsY.push_back(cont[j].getPos().y());
 					ball::moveUs(cont[i], cont[j]);
-					std::cout << "And now we are - 1x = " << cont[i].getPos().x() << ", 1y = " << cont[i].getPos().y() << "\n2x = "
-						<< cont[j].getPos().x() << ", 2y = " << cont[j].getPos().y() << std::endl;
+					
 					goto again;
 				}
 			}
 		}
 	}
+	whoIsHeld = nullptr;
 
 }
 
@@ -176,9 +201,9 @@ void ballCon::oneCheck(const int i)
 	{
 		const ball& first = cont[i];
 		const ball& second = cont[j];
-		if ((first.getPos() + first.getDir() - second.getPos()).norm() < (second.getRad() + first.getRad()))
+		if ((first.getPos() - second.getPos()).norm() < (second.getRad() + first.getRad()))
 		{
-			ball::bump(const_cast<ball&>(first), const_cast<ball&>(second));
+			ball::moveUs(const_cast<ball&>(first), const_cast<ball&>(second));
 			const_cast<ball&>(first).go();
 		}
 		else
@@ -201,21 +226,37 @@ void ballCon::checkAll()
 			if (i != j) {
 				const ball& first = cont[i];
 				const ball& second = cont[j];
-				if ((first.getPos() + first.getDir() - second.getPos()).norm() < (second.getRad() + first.getRad()))
-				{
-					ball::bump(const_cast<ball&>(first), const_cast<ball&>(second));
-					const_cast<ball&>(first).go();
-				}
-				else
-				{
-					const_cast<ball&>(first).go();
-				}
+					if ((first.getPos() - second.getPos()).norm() < (second.getRad() + first.getRad()))
+					{
+						ball::moveUs(const_cast<ball&>(first), const_cast<ball&>(second));
+							ball::bump(const_cast<ball&>(first), const_cast<ball&>(second));
+							const_cast<ball&>(first).bumped = true;
+							const_cast<ball&>(second).bumped = true;
+					}
+			const_cast<ball&>(first).go();
 			}
 		}
 	}
 }
 
 
+void ballCon::resetBumps()
+{
+	for (int i = 0; i < parser::ballQuan; ++i)
+	{
+		cont[i].bumped = false;
+	}
+}
+void ballCon::findOne(int mX, int mY)
+{
+	for (int i = 0; i < parser::ballQuan; ++i)
+	{
+		if ((cont[i].getPos() - Eigen::Vector2f(mX, mY)).norm() < cont[i].getRad()) {
+			whoIsHeld = &cont[i];
+			return;
+		}
+	}
+}
 
 
 
